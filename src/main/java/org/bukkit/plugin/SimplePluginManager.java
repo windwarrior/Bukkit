@@ -93,6 +93,82 @@ public final class SimplePluginManager implements PluginManager {
         }
     }
 
+    public class PluginNode {
+        public List<DependencyEdge> inEdges = new ArrayList<DependencyEdge>();
+        public List<DependencyEdge> outEdges = new ArrayList<DependencyEdge>();
+        private String name;
+        private File file;
+        public PluginNode(String name, File f){
+            this.name = name;
+            this.file = f;
+        }
+
+        public void addOutEdge(PluginNode n){
+            DependencyEdge e = new DependencyEdge(this, n);
+            outEdges.add(e);
+            n.addInEdge(e);
+
+        }
+
+        public void addInEdge(DependencyEdge e){
+            inEdges.add(e);
+        }
+
+        public List<DependencyEdge> getInEdges(){
+            return inEdges;
+        }
+
+        public List<DependencyEdge> getOutEdges(){
+            return outEdges;
+        }
+
+        public boolean hasInEdges(){
+            return !(inEdges.size() == 0);
+        }
+        
+        public File getFile(){
+            return file;
+        }
+        
+        @Override
+        public String toString(){
+            return name;
+        }
+        
+        @Override
+        public boolean equals(Object other){
+            return other instanceof PluginNode && ((PluginNode) other).toString().equals(this.toString());
+        }
+        
+        @Override
+        public int hashCode(){
+            return this.toString().hashCode();
+        }
+    }
+
+    public class DependencyEdge {
+
+        private PluginNode from;
+        private PluginNode to;
+
+        public DependencyEdge(PluginNode from, PluginNode to) {
+            this.from = from;
+            this.to = to;
+        }
+
+        public PluginNode getFrom() {
+            return from;
+        }
+
+
+        public PluginNode getTo() {
+            return to;
+        }
+
+    }
+    
+    
+    
     /**
      * Loads the plugins contained within the specified directory
      *
@@ -100,6 +176,7 @@ public final class SimplePluginManager implements PluginManager {
      * @return A list of all plugins loaded
      */
     public Plugin[] loadPlugins(File directory) {
+        System.out.println("blab");
         Validate.notNull(directory, "Directory cannot be null");
         Validate.isTrue(directory.isDirectory(), "Directory must be a directory");
 
@@ -110,11 +187,10 @@ public final class SimplePluginManager implements PluginManager {
             updateDirectory = new File(directory, server.getUpdateFolder());
         }
 
-        Map<String, File> plugins = new HashMap<String, File>();
         Set<String> loadedPlugins = new HashSet<String>();
-        Map<String, Collection<String>> dependencies = new HashMap<String, Collection<String>>();
-        Map<String, Collection<String>> softDependencies = new HashMap<String, Collection<String>>();
-
+        Map<PluginNode, Collection<String>> dependencies = new HashMap<PluginNode, Collection<String>>();
+        Map<PluginNode, Collection<String>> softDependencies = new HashMap<PluginNode, Collection<String>>();
+        List<PluginNode> pluginGraph = new ArrayList<PluginNode>();
         // This is where it figures out all possible plugins
         for (File file : directory.listFiles()) {
             PluginLoader loader = null;
@@ -134,131 +210,121 @@ public final class SimplePluginManager implements PluginManager {
                 server.getLogger().log(Level.SEVERE, "Could not load '" + file.getPath() + "' in folder '" + directory.getPath() + "'", ex);
                 continue;
             }
-
-            plugins.put(description.getName(), file);
-
+            PluginNode node = new PluginNode(description.getName(), file);
+            pluginGraph.add(node);
             Collection<String> softDependencySet = description.getSoftDepend();
             if (softDependencySet != null) {
-                softDependencies.put(description.getName(), new LinkedList<String>(softDependencySet));
+                softDependencies.put(node, new LinkedList<String>(softDependencySet));
             }
 
             Collection<String> dependencySet = description.getDepend();
             if (dependencySet != null) {
-                dependencies.put(description.getName(), new LinkedList<String>(dependencySet));
+                dependencies.put(node, new LinkedList<String>(dependencySet));
             }
         }
 
-        while (!plugins.isEmpty()) {
-            boolean missingDependency = true;
-            Iterator<String> pluginIterator = plugins.keySet().iterator();
+        //First off, we are going to check dependencies of all plugins, and therefore building the dependency graph
+        //This graph shows how dependencies are in relation to eachother, and using a Topological Sort algorithm
+        //We can find out how to load the plugins.
+        for(Iterator<PluginNode> it = pluginGraph.iterator(); it.hasNext();){
+            PluginNode fromNode = it.next();
+            Collection<String> softDependencySet = softDependencies.get(fromNode);
+            Collection<String> dependencySet = dependencies.get(fromNode);
+            
+            if(dependencySet != null){
+                for(String dep: dependencySet){
 
-            while (pluginIterator.hasNext()) {
-                String plugin = pluginIterator.next();
-
-                if (dependencies.containsKey(plugin)) {
-                    Iterator<String> dependencyIterator = dependencies.get(plugin).iterator();
-
-                    while (dependencyIterator.hasNext()) {
-                        String dependency = dependencyIterator.next();
-
-                        // Dependency loaded
-                        if (loadedPlugins.contains(dependency)) {
-                            dependencyIterator.remove();
-
-                        // We have a dependency not found
-                        } else if (!plugins.containsKey(dependency)) {
-                            missingDependency = false;
-                            File file = plugins.get(plugin);
-                            pluginIterator.remove();
-                            softDependencies.remove(plugin);
-                            dependencies.remove(plugin);
-
-                            server.getLogger().log(
-                                Level.SEVERE,
-                                "Could not load '" + file.getPath() + "' in folder '" + directory.getPath() + "'",
-                                new UnknownDependencyException(dependency));
-                            break;
-                        }
-                    }
-
-                    if (dependencies.containsKey(plugin) && dependencies.get(plugin).isEmpty()) {
-                        dependencies.remove(plugin);
-                    }
-                }
-                if (softDependencies.containsKey(plugin)) {
-                    Iterator<String> softDependencyIterator = softDependencies.get(plugin).iterator();
-
-                    while (softDependencyIterator.hasNext()) {
-                        String softDependency = softDependencyIterator.next();
-
-                        // Soft depend is no longer around
-                        if (!plugins.containsKey(softDependency)) {
-                            softDependencyIterator.remove();
-                        }
-                    }
-
-                    if (softDependencies.get(plugin).isEmpty()) {
-                        softDependencies.remove(plugin);
-                    }
-                }
-                if (!(dependencies.containsKey(plugin) || softDependencies.containsKey(plugin)) && plugins.containsKey(plugin)) {
-                    // We're clear to load, no more soft or hard dependencies left
-                    File file = plugins.get(plugin);
-                    pluginIterator.remove();
-                    missingDependency = false;
-
-                    try {
-                        result.add(loadPlugin(file));
-                        loadedPlugins.add(plugin);
+                    if(pluginGraph.contains(dep)){
+                        PluginNode toNode = pluginGraph.get(pluginGraph.indexOf(dep));
+                        fromNode.addOutEdge(toNode);
+                    }else{
+                        server.getLogger().log(Level.SEVERE, "Could not load '" +  fromNode.toString() + " missing dependency");
+                        it.remove();
                         continue;
-                    } catch (InvalidPluginException ex) {
-                        server.getLogger().log(Level.SEVERE, "Could not load '" + file.getPath() + "' in folder '" + directory.getPath() + "'", ex);
                     }
                 }
             }
-
-            if (missingDependency) {
-                // We now iterate over plugins until something loads
-                // This loop will ignore soft dependencies
-                pluginIterator = plugins.keySet().iterator();
-
-                while (pluginIterator.hasNext()) {
-                    String plugin = pluginIterator.next();
-
-                    if (!dependencies.containsKey(plugin)) {
-                        softDependencies.remove(plugin);
-                        dependencies.remove(plugin);
-                        missingDependency = false;
-                        File file = plugins.get(plugin);
-                        pluginIterator.remove();
-
-                        try {
-                            result.add(loadPlugin(file));
-                            loadedPlugins.add(plugin);
-                            break;
-                        } catch (InvalidPluginException ex) {
-                            server.getLogger().log(Level.SEVERE, "Could not load '" + file.getPath() + "' in folder '" + directory.getPath() + "'", ex);
-                        }
+            
+            //Yes, i am turning soft dependencies into hard ones
+            //minor difference, we do not exclude a plugin from loading when a soft
+            //dependency is not met
+            if(softDependencySet != null){
+                for(String dep: softDependencySet){
+                    if(pluginGraph.contains(dep)){
+                        PluginNode toNode = pluginGraph.get(pluginGraph.indexOf(dep));
+                        fromNode.addOutEdge(toNode);
+                    }else{
+                        server.getLogger().log(Level.INFO, "Loading '" +  fromNode.toString() + " without soft dependency " + dep);
                     }
                 }
-                // We have no plugins left without a depend
-                if (missingDependency) {
-                    softDependencies.clear();
-                    dependencies.clear();
-                    Iterator<File> failedPluginIterator = plugins.values().iterator();
-
-                    while (failedPluginIterator.hasNext()) {
-                        File file = failedPluginIterator.next();
-                        failedPluginIterator.remove();
-                        server.getLogger().log(Level.SEVERE, "Could not load '" + file.getPath() + "' in folder '" + directory.getPath() + "': circular dependency detected");
-                    }
-                }
+            }
+           
+        }
+        
+        //Sort the plugins using the topilogical sorter
+        List<PluginNode> sortedPluginList = sortPluginListTopilogical(pluginGraph);
+        
+        //And load the plugins
+        for(PluginNode pnd : sortedPluginList){
+            try {
+                result.add(loadPlugin(pnd.getFile()));
+                loadedPlugins.add(pnd.toString());
+            } catch (InvalidPluginException ex) {
+                server.getLogger().log(Level.SEVERE, "Could not load '" + pnd.getFile().getPath() + "' in folder '" + directory.getPath() + "'", ex);
             }
         }
 
         return result.toArray(new Plugin[result.size()]);
     }
-
+    
+    /**
+     * This is the sorter, that will take a list of pluginNodes
+     * and using the first Topological algoritm defined by wikipedia (first one)
+     * determins a ordering to load the plugins
+     * http://en.wikipedia.org/wiki/Topological_sort
+     * and with some help from
+     * http://stackoverflow.com/questions/2739392/sample-directed-graph-and-topological-sort-code
+     * @param pluginList
+     * @return
+     */
+    public List<PluginNode> sortPluginListTopilogical(List<PluginNode> pluginList){
+        List<PluginNode> resultList = new ArrayList<PluginNode>();
+        List<PluginNode> nonIncomingEdgesList = new ArrayList<PluginNode>();
+        
+        for(PluginNode p : pluginList){
+            if(!p.hasInEdges()){
+                nonIncomingEdgesList.add(p);
+                System.out.println(p);
+            }
+        }
+        
+        while(!nonIncomingEdgesList.isEmpty()){
+            PluginNode nodeFrom = nonIncomingEdgesList.iterator().next();
+            nonIncomingEdgesList.remove(nodeFrom);
+            
+            resultList.add(nodeFrom);
+            for(Iterator<DependencyEdge> it = nodeFrom.getOutEdges().iterator(); it.hasNext();){
+                DependencyEdge de = it.next();
+                PluginNode nodeTo = de.getTo();
+                it.remove();
+                nodeTo.getInEdges().remove(de);
+                
+                if(nodeTo.getInEdges().isEmpty()){
+                    nonIncomingEdgesList.add(nodeTo);
+                }
+                
+            }
+        }
+        
+        for(PluginNode pnd : pluginList){
+            if(!pnd.getInEdges().isEmpty()){
+               //TODO: do something, you cannot just stand here and watch
+                server.getLogger().log(Level.SEVERE, "Could not determin a way to load '" + pnd.getFile().getPath() + "': circular dependency detected"); 
+            }
+        }
+        
+        return resultList;
+    }
     /**
      * Loads the plugin in the specified file
      * <p />
