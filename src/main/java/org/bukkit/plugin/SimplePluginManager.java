@@ -5,6 +5,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -19,6 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.lang.Validate;
+import org.bukkit.ChatColor;
 import org.bukkit.Server;
 import org.bukkit.command.Command;
 import org.bukkit.command.PluginCommandYamlParser;
@@ -137,7 +139,7 @@ public final class SimplePluginManager implements PluginManager {
         
         @Override
         public boolean equals(Object other){
-            return other instanceof PluginNode && ((PluginNode) other).toString().equals(this.toString());
+            return other.toString().equals(this.toString());
         }
         
         @Override
@@ -176,7 +178,6 @@ public final class SimplePluginManager implements PluginManager {
      * @return A list of all plugins loaded
      */
     public Plugin[] loadPlugins(File directory) {
-        System.out.println("blab");
         Validate.notNull(directory, "Directory cannot be null");
         Validate.isTrue(directory.isDirectory(), "Directory must be a directory");
 
@@ -222,6 +223,7 @@ public final class SimplePluginManager implements PluginManager {
                 dependencies.put(node, new LinkedList<String>(dependencySet));
             }
         }
+        server.getLogger().log(Level.INFO, ChatColor.BLUE + pluginGraph.toString());
 
         //First off, we are going to check dependencies of all plugins, and therefore building the dependency graph
         //This graph shows how dependencies are in relation to eachother, and using a Topological Sort algorithm
@@ -230,15 +232,19 @@ public final class SimplePluginManager implements PluginManager {
             PluginNode fromNode = it.next();
             Collection<String> softDependencySet = softDependencies.get(fromNode);
             Collection<String> dependencySet = dependencies.get(fromNode);
+            server.getLogger().log(Level.INFO, ChatColor.GREEN + fromNode.toString());
+            
             
             if(dependencySet != null){
+                server.getLogger().log(Level.INFO, "Deps: " + dependencySet.toString());
                 for(String dep: dependencySet){
-
-                    if(pluginGraph.contains(dep)){
-                        PluginNode toNode = pluginGraph.get(pluginGraph.indexOf(dep));
+                    System.out.println(dep);
+                    int dependencyIndex;
+                    if((dependencyIndex = pluginGraph.indexOf(new PluginNode(dep, null))) != -1){
+                        PluginNode toNode = pluginGraph.get(dependencyIndex);
                         fromNode.addOutEdge(toNode);
                     }else{
-                        server.getLogger().log(Level.SEVERE, "Could not load '" +  fromNode.toString() + " missing dependency");
+                        server.getLogger().log(Level.SEVERE, "Could not load '" +  fromNode.toString() + "' missing dependency");
                         it.remove();
                         continue;
                     }
@@ -249,24 +255,28 @@ public final class SimplePluginManager implements PluginManager {
             //minor difference, we do not exclude a plugin from loading when a soft
             //dependency is not met
             if(softDependencySet != null){
+                server.getLogger().log(Level.INFO, "SoftDeps: " + softDependencySet.toString());
                 for(String dep: softDependencySet){
-                    if(pluginGraph.contains(dep)){
-                        PluginNode toNode = pluginGraph.get(pluginGraph.indexOf(dep));
+                    if(pluginGraph.contains(new PluginNode(dep, null))){
+                        PluginNode toNode = pluginGraph.get(pluginGraph.indexOf(new PluginNode(dep, null)));
                         fromNode.addOutEdge(toNode);
                     }else{
-                        server.getLogger().log(Level.INFO, "Loading '" +  fromNode.toString() + " without soft dependency " + dep);
+                        server.getLogger().log(Level.INFO, "Loading '" +  fromNode.toString() + "' without soft dependency " + dep);
                     }
                 }
             }
            
         }
         
-        //Sort the plugins using the topilogical sorter
+        //Sort the plugins using the topilogical sorter, in reversed order
         List<PluginNode> sortedPluginList = sortPluginListTopilogical(pluginGraph);
-        
+        //Sorted list in right order :)
+        Collections.reverse(sortedPluginList);
+        server.getLogger().info("Gesorteerde Plugins" + sortedPluginList.toString());
         //And load the plugins
         for(PluginNode pnd : sortedPluginList){
             try {
+                server.getLogger().info("Loading plugin " + pnd);
                 result.add(loadPlugin(pnd.getFile()));
                 loadedPlugins.add(pnd.toString());
             } catch (InvalidPluginException ex) {
